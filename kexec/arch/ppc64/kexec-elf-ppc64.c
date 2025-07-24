@@ -325,11 +325,6 @@ int elf_ppc64_load(int argc, char **argv, const char *buf, off_t len,
 	 * Note: Add the ramdisk after elf_rel_build_load
 	 */
 	if (ramdisk) {
-		if (devicetreeblob) {
-			fprintf(stderr,
-			"Can't use ramdisk with device tree blob input\n");
-			return -1;
-		}
 		seg_buf = slurp_file(ramdisk, &seg_size);
 		hole_addr = add_buffer(info, seg_buf, seg_size, seg_size,
 			0, 0, max_addr, 1);
