@@ -40,6 +40,8 @@
 #include <libfdt.h>
 #include <arch/fdt.h>
 #include <arch/options.h>
+#include <dirent.h>
+#include <assert.h>
 
 uint64_t initrd_base, initrd_size;
 unsigned char reuse_initrd = 0;
@@ -178,6 +180,159 @@ out:
 	if (cmdline_len == 1)
 		free(cmdline);
 	return ret;
+}
+
+int patch_devicetree_read_proc_file(char* filename, char* buf) {
+	FILE* f;
+	int len;
+
+	f = fopen(filename, "r");
+	if (f == NULL) {
+		perror("unable to open file");
+	}
+	len = fread(buf, 1, 10, f);
+	fclose(f);
+
+	return len;
+}
+
+
+void patch_devicetree_dtb_reserve(void* dtb, uint64_t where, uint64_t length)
+{
+	int ret;
+
+	ret = fdt_add_mem_rsv(dtb, where, length);
+	assert(ret == 0 && "unable to reserve on fdt");
+
+	return;
+}
+
+static void patch_devicetree_checkprop(void* dtb, char *name, unsigned *data, int len)
+{
+	static unsigned long long base, size, end;
+
+	if ((data == NULL) && (base || size || end))
+		die("unrecoverable error: no property data");
+	else if (!strcmp(name, "linux,rtas-base"))
+		base = be32_to_cpu(*data);
+	else if (!strcmp(name, "opal-base-address"))
+		base = be64_to_cpu(*(unsigned long long *)data);
+	else if (!strcmp(name, "opal-runtime-size"))
+		size = be64_to_cpu(*(unsigned long long *)data);
+	else if (!strcmp(name, "linux,tce-base"))
+		base = be64_to_cpu(*(unsigned long long *) data);
+	else if (!strcmp(name, "rtas-size") ||
+			!strcmp(name, "linux,tce-size"))
+		size = be32_to_cpu(*data);
+	else if (reuse_initrd && !strcmp(name, "linux,initrd-start")) {
+		if (len == 8)
+			base = be64_to_cpu(*(unsigned long long *) data);
+		else
+			base = be32_to_cpu(*data);
+	} else if (reuse_initrd && !strcmp(name, "linux,initrd-end")) {
+		if (len == 8)
+			end = be64_to_cpu(*(unsigned long long *) data);
+		else
+			end = be32_to_cpu(*data);
+	}
+
+	if (size && end)
+		die("unrecoverable error: size and end set at same time\n");
+	if (base && size) {
+		patch_devicetree_dtb_reserve(dtb, base, size);
+		base = size = 0;
+	}
+	if (base && end) {
+		patch_devicetree_dtb_reserve(dtb, base, end-base);
+		base = end = 0;
+	}
+}
+
+void patch_devicetree_file_traversal(void *dtb, const char *pathname) {
+#define MAX_PATH_LEN 1024
+	DIR *dir = opendir(pathname);
+	if (!dir) {
+		perror("opendir failed");
+		return;
+	}
+
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL) {
+		// Skip '.' and '..'
+		if (entry->d_name[0] == '.')
+			continue;
+
+		char full_path[MAX_PATH_LEN];
+		snprintf(full_path, sizeof(full_path), "%s/%s", pathname, entry->d_name);
+
+		// Check if entry is a directory
+		if (entry->d_type == DT_DIR) {
+			patch_devicetree_file_traversal(dtb, full_path);
+		} else {
+			char patch_devicetree_file_data[10];
+			int readlen = patch_devicetree_read_proc_file(full_path, patch_devicetree_file_data);
+			if (readlen > 0) {
+				patch_devicetree_checkprop(dtb, entry->d_name,
+						(unsigned *)patch_devicetree_file_data, readlen);
+			}
+		}
+	}
+
+	closedir(dir);
+}
+
+void patch_devicetree_with_initrd_info(char* dtb, uint64_t initrd_base,
+		uint64_t initrd_size) {
+
+	int ret, offset;
+	unsigned long initrd_end = initrd_base + initrd_size;
+	uint64_t base_be = cpu_to_be64(initrd_base);
+	uint64_t end_be  = cpu_to_be64(initrd_end);
+
+	ret = 0;
+	offset = fdt_path_offset(dtb, "/chosen");
+	assert(offset >= 0 && "failed to find the /chosen node");
+
+	ret = fdt_setprop(dtb, offset, "linux,initrd-start", &base_be, sizeof(base_be));
+	assert(ret == 0 && "failed to set initrd-start on dtb");
+
+	ret = fdt_setprop(dtb, offset, "linux,initrd-end", &end_be, sizeof(end_be));
+	assert(ret == 0 && "failed to set initrd-end on dtb");
+
+}
+
+
+void patch_devicetree(char *dtb, uint64_t initrd_base,
+		uint64_t initrd_size)
+{
+	int ret;
+
+	patch_devicetree_with_initrd_info(dtb, initrd_base, initrd_size);
+
+	patch_devicetree_file_traversal(dtb, "/proc/device-tree");
+
+	ret = fdt_add_mem_rsv(dtb, initrd_base, initrd_size);
+	assert(ret == 0 && "failed to add rsvmap");
+
+	ret = fdt_add_mem_rsv(dtb, 0, fdt_totalsize(dtb));
+	assert(ret == 0 && "failed to add rsvmap");
+
+	fdt_set_boot_cpuid_phys(dtb, 0x0);
+	fdt_set_last_comp_version(dtb, 17);
+
+}
+
+char* patch_devicetree_alloc_new_dtb(char* dtb, off_t* newsize) {
+	int ret;
+
+	*newsize = fdt_totalsize(dtb) + 256;
+	dtb = (char*) realloc(dtb, *newsize);
+	ret = fdt_open_into(dtb, dtb, *newsize);
+
+	assert(ret == 0 &&
+		"fdt_open_into failed");
+
+	return dtb;
 }
 
 int elf_ppc64_load(int argc, char **argv, const char *buf, off_t len,
@@ -335,6 +490,12 @@ int elf_ppc64_load(int argc, char **argv, const char *buf, off_t len,
 	if (devicetreeblob) {
 		/* Grab device tree from buffer */
 		seg_buf = slurp_file(devicetreeblob, &seg_size);
+
+		if (ramdisk) {
+			seg_buf = patch_devicetree_alloc_new_dtb(seg_buf, &seg_size);
+			patch_devicetree(seg_buf, initrd_base, initrd_size);
+		}
+
 	} else {
 		/* create from fs2dt */
 		create_flatten_tree(&seg_buf, &seg_size, cmdline);
@@ -397,6 +558,7 @@ int elf_ppc64_load(int argc, char **argv, const char *buf, off_t len,
 		/* Set panic flag */
 		elf_rel_set_symbol(&info->rhdr, "panic_kernel",
 				&my_panic_kernel, sizeof(my_panic_kernel));
+
 
 		/* Set backup address */
 		my_backup_start = info->backup_start;
