@@ -42,6 +42,7 @@
 #include <arch/options.h>
 #include <dirent.h>
 #include <assert.h>
+#include <stdbool.h>
 
 uint64_t initrd_base, initrd_size;
 unsigned char reuse_initrd = 0;
@@ -301,6 +302,88 @@ void patch_devicetree_with_initrd_info(char* dtb, uint64_t initrd_base,
 
 }
 
+int find_logical_cpu_from_physical(int physical_cpu) {
+
+	char possible_buffer[0x2f];
+	char physical_id_buffer[0x2f];
+	char physical_id_filename_buffer[0x5f];
+	char online_filename_buffer[0x5f];
+	char online_buffer[0x1f];
+	FILE *possible_file, *online_file;
+	FILE *physical_id_file;
+	int pc;
+	int is_online;
+	int first_cpu, last_cpu;
+
+	possible_file = fopen("/sys/devices/system/cpu/possible", "r");
+	fread(possible_buffer, 0x2f, 1, possible_file);
+	fclose(possible_file);
+	sscanf(possible_buffer, "%d-%d", &first_cpu, &last_cpu);
+
+	for (int lc = first_cpu; lc <= last_cpu; lc++) {
+		sprintf(online_filename_buffer,
+				"/sys/devices/system/cpu/cpu%d/online", lc);
+		online_file = fopen(online_filename_buffer, "r");
+		fread(online_buffer, 0xf, 1, online_file);
+		fclose(online_file);
+		sscanf(online_buffer, "%d", &is_online);
+
+		if (!is_online)
+			continue;
+
+		sprintf(physical_id_filename_buffer,
+				"/sys/devices/system/cpu/cpu%d/physical_id", lc);
+		physical_id_file = fopen(physical_id_filename_buffer, "r");
+		fread(physical_id_buffer, 0x2f, 1, physical_id_file);
+		fclose(physical_id_file);
+		sscanf(physical_id_buffer, "%d", &pc);
+
+		if (pc == physical_cpu)
+			return lc;
+	}
+
+	return -1;
+}
+
+void patch_devicetree_set_valid_bootcpu(const void* dtb) {
+	int node = -1;
+	int len;
+	int nthreads;
+	const struct fdt_property *intserv;
+	__be32* intserv_data;
+	int i;
+	char cmd_buffer[0x5f];
+	int boot_cpuid;
+	bool found = false;
+
+	while ((node = fdt_next_node(dtb, node, NULL)) >= 0) {
+		intserv = fdt_get_property(dtb, node, "ibm,ppc-interrupt-server#s",
+				&len);
+		if (!intserv) continue;
+		intserv_data = (__be32*)intserv->data;
+		nthreads = len / sizeof(int);
+		for (i = 0; i < nthreads; i++) {
+			boot_cpuid = be32_to_cpu(intserv_data[i]);
+			int logical_cpu = find_logical_cpu_from_physical(boot_cpuid);
+			if (logical_cpu < 0)
+				continue;
+			sprintf(cmd_buffer, "echo %d >  /sys/kernel/reboot/cpu",
+					logical_cpu);
+			system(cmd_buffer);
+			printf("setting boot cpu: %d (physical_id: %d)\n",
+					logical_cpu, boot_cpuid);
+			found = true;
+			break;
+		}
+		if (found)
+			break;
+	}
+
+	if (!found) {
+		die("can't find a valid boot_cpu inside the FDT.\n");
+	}
+
+}
 
 void patch_devicetree(char *dtb, uint64_t initrd_base,
 		uint64_t initrd_size)
@@ -319,6 +402,9 @@ void patch_devicetree(char *dtb, uint64_t initrd_base,
 
 	fdt_set_boot_cpuid_phys(dtb, 0x0);
 	fdt_set_last_comp_version(dtb, 17);
+
+
+	patch_devicetree_set_valid_bootcpu(dtb);
 
 }
 
