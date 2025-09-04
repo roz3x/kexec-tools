@@ -249,3 +249,7 @@ int arch_do_exclude_segment(struct kexec_info *UNUSED(info), struct kexec_segmen
 {
 	return 0;
 }
+
+void arch_do_unload(void)
+{
+}
