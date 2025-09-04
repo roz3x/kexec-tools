@@ -982,4 +982,9 @@ int arch_do_exclude_segment(struct kexec_info *info, struct kexec_segment *segme
 
 void arch_do_unload(void)
 {
+       /*
+        * the bootcpu is overwritten during the loading process
+        * reset it back to 0
+        */
+       system("echo 0 > /sys/kernel/reboot/cpu");
 }
