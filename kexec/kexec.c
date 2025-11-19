@@ -1518,6 +1518,8 @@ int main(int argc, char *argv[])
 			return 0;
 		case OPT_DEBUG:
 			kexec_debug = 1;
+			break;
+		case OPT_SYSCALL_DEBUG:
 			kexec_flags |= KEXEC_DEBUG;
 			kexec_file_flags |= KEXEC_FILE_DEBUG;
 			break;

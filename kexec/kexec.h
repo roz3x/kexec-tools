@@ -235,7 +235,8 @@ extern int file_types;
 #define OPT_LOAD_LIVE_UPDATE	263
 #define OPT_EXEC_LIVE_UPDATE	264
 #define OPT_HOTPLUG		        265
-#define OPT_MAX		266
+#define OPT_SYSCALL_DEBUG       266
+#define OPT_MAX		267
 #define KEXEC_OPTIONS \
 	{ "help",		0, 0, OPT_HELP }, \
 	{ "version",		0, 0, OPT_VERSION }, \
@@ -260,6 +261,7 @@ extern int file_types;
 	{ "kexec-syscall",	0, 0, OPT_KEXEC_SYSCALL }, \
 	{ "kexec-syscall-auto",	0, 0, OPT_KEXEC_SYSCALL_AUTO }, \
 	{ "debug",		0, 0, OPT_DEBUG }, \
+	{ "kexec-syscall-debug",0, 0, OPT_SYSCALL_DEBUG }, \
 	{ "status",		0, 0, OPT_STATUS }, \
 	{ "print-ckr-size",     0, 0, OPT_PRINT_CKR_SIZE }, \
 	{ "hotplug",		    0, 0, OPT_HOTPLUG }, \
