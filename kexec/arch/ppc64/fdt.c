@@ -140,7 +140,7 @@ static int get_threads_per_cpu(char *path)
  *
  * Returns total number of present CPUs on success, -1 on failure.
  */
-static int get_present_cpus()
+static int get_present_cpus(void)
 {
 	char *range;
 	char buf[1024];
